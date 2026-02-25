@@ -36,6 +36,25 @@ def get_player_url(player_name):
     url = f"{BASE_URL}/afl/stats/players/{first_letter}/{formatted_name}.html"
     return url
 
+def format_player_name(raw_name):
+    """
+    Converts "Berry, Sam" format to "Sam Berry" format.
+    
+    Example:
+        "Berry, Sam" -> "Sam Berry"
+        "O'Brien, Reilly" -> "Reilly O'Brien"
+    """
+    # Split on the comma
+    parts = raw_name.split(",")
+    
+    if len(parts) != 2:
+        return raw_name
+    
+    surname = parts[0].strip()
+    first_name = parts[1].strip()
+    
+    return f"{first_name} {surname}"
+
 def get_page(url):
     # Fetch webpage
     try:
@@ -167,3 +186,120 @@ def get_all_player_data(player_name):
 
 # Temporary test
 games_df, opponent_stats, venue_stats = get_all_player_data("Sam Berry")
+
+def get_team_players(team, season):
+    """
+    Scrapes all player names from a team's season page.
+    
+    Returns a list of player names like:
+        ["Sam Berry", "Jordan Dawson", "Rory Laird", ...]
+    """
+    url = f"{BASE_URL}/afl/stats/teams/{team}/{season}_gbg.html"
+    soup = get_page(url)
+    
+    if soup is None:
+        return []
+    
+    try:
+        tables = soup.find_all("table")
+        
+        # Player stats are in the first table
+        player_table = tables[0]
+        rows = player_table.find_all("tr")
+        
+        players = []
+        
+        for row in rows:
+            cells = row.find_all("td")
+            
+            if not cells:
+                continue
+            
+            # First cell contains the player name as a link
+            first_cell = cells[0]
+            link = first_cell.find("a")
+            
+            if link:
+                player_name = link.text.strip()
+                if player_name:
+                    players.append(format_player_name(player_name))
+        
+        return players
+    
+    except Exception as e:
+        print(f"Error getting players for {team} {season}: {e}")
+        return []
+
+def save_all_data():
+    """
+    Master function that scrapes all player data across all teams and seasons.
+    Saves results to data/raw/ as CSV files.
+    
+    Skips players already scraped to allow resuming if interrupted.
+    """
+    # Create output directory if it doesn't exist
+    os.makedirs(RAW_DATA_PATH, exist_ok=True)
+    
+    all_games = []
+    all_opponent_stats = {}
+    all_venue_stats = {}
+    
+    # Track players already scraped to avoid duplicates
+    scraped_players = set()
+    
+    for season in SEASONS:
+        print(f"\n=== Season {season} ===")
+        
+        for team in TEAMS:
+            print(f"  Fetching {team}...")
+            
+            players = get_team_players(team, season)
+            
+            if not players:
+                print(f"  No players found for {team} {season}")
+                continue
+            
+            for player_name in players:
+                
+                # Skip if already scraped this player
+                if player_name in scraped_players:
+                    continue
+                
+                print(f"    Scraping {player_name}...")
+                
+                games_df, opponent_stats, venue_stats = get_all_player_data(player_name)
+                
+                if not games_df.empty:
+                    all_games.append(games_df)
+                
+                if opponent_stats:
+                    all_opponent_stats[player_name] = opponent_stats
+                
+                if venue_stats:
+                    all_venue_stats[player_name] = venue_stats
+                
+                scraped_players.add(player_name)
+    
+    print("\n=== Saving data ===")
+    
+    # Combine all game dataframes into one big dataframe
+    if all_games:
+        games_combined = pd.concat(all_games, ignore_index=True)
+        games_path = os.path.join(RAW_DATA_PATH, "all_games.csv")
+        games_combined.to_csv(games_path, index=False)
+        print(f"Saved {len(games_combined)} games to {games_path}")
+    
+    # Save opponent stats
+    opponent_df = pd.DataFrame(all_opponent_stats).T
+    opponent_path = os.path.join(RAW_DATA_PATH, "opponent_stats.csv")
+    opponent_df.to_csv(opponent_path)
+    print(f"Saved opponent stats to {opponent_path}")
+    
+    # Save venue stats
+    venue_df = pd.DataFrame(all_venue_stats).T
+    venue_path = os.path.join(RAW_DATA_PATH, "venue_stats.csv")
+    venue_df.to_csv(venue_path)
+    print(f"Saved venue stats to {venue_path}")
+    
+    print("\n=== Complete ===")
+
