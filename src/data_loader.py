@@ -5,11 +5,13 @@ import time
 import os
 
 BASE_URL = "https://afltables.com"
-TEAMS = ["adelaide", "brisbane", "carlton", "collingwood",
+TEAMS = [
+    "adelaide", "brisbanel", "carlton", "collingwood",
     "essendon", "fremantle", "geelong", "goldcoast",
-    "gws", "hawthorn", "melbourne", "northmelbourne",
-    "portadelaide", "richmond", "stkilda", "sydney",
-    "westcoast", "westernbulldogs"]
+    "gws", "hawthorn", "melbourne", "kangaroos",
+    "padelaide", "richmond", "stkilda", "swans",
+    "westcoast", "bullldogs"
+]
 
 SEASONS = [2022, 2023, 2024]
 
@@ -303,3 +305,67 @@ def save_all_data():
     
     print("\n=== Complete ===")
 
+def save_missing_teams():
+    """
+    Targeted scrape for teams that failed in the initial run.
+    Appends results to existing CSV files.
+    """
+    MISSING_TEAMS = ["brisbanel", "kangaroos", "padelaide", "swans", "bullldogs"]
+    
+    os.makedirs(RAW_DATA_PATH, exist_ok=True)
+    
+    all_games = []
+    all_opponent_stats = {}
+    all_venue_stats = {}
+    scraped_players = set()
+    
+    for season in SEASONS:
+        print(f"\n=== Season {season} ===")
+        for team in MISSING_TEAMS:
+            print(f"  Fetching {team}...")
+            players = get_team_players(team, season)
+            
+            if not players:
+                print(f"  No players found for {team} {season}")
+                continue
+                
+            for player_name in players:
+                if player_name in scraped_players:
+                    continue
+                    
+                print(f"    Scraping {player_name}...")
+                games_df, opponent_stats, venue_stats = get_all_player_data(player_name)
+                
+                if not games_df.empty:
+                    all_games.append(games_df)
+                if opponent_stats:
+                    all_opponent_stats[player_name] = opponent_stats
+                if venue_stats:
+                    all_venue_stats[player_name] = venue_stats
+                    
+                scraped_players.add(player_name)
+    
+    if all_games:
+        new_games = pd.concat(all_games, ignore_index=True)
+        existing_games = pd.read_csv(os.path.join(RAW_DATA_PATH, "all_games.csv"))
+        combined = pd.concat([existing_games, new_games], ignore_index=True)
+        combined.to_csv(os.path.join(RAW_DATA_PATH, "all_games.csv"), index=False)
+        print(f"\nAdded {len(new_games)} new games")
+        print(f"Total games now: {len(combined)}")
+    
+    if all_opponent_stats:
+        new_opponent_df = pd.DataFrame(all_opponent_stats).T
+        existing_opponent = pd.read_csv(os.path.join(RAW_DATA_PATH, "opponent_stats.csv"), index_col=0)
+        combined_opponent = pd.concat([existing_opponent, new_opponent_df])
+        combined_opponent.to_csv(os.path.join(RAW_DATA_PATH, "opponent_stats.csv"))
+    
+    if all_venue_stats:
+        new_venue_df = pd.DataFrame(all_venue_stats).T
+        existing_venue = pd.read_csv(os.path.join(RAW_DATA_PATH, "venue_stats.csv"), index_col=0)
+        combined_venue = pd.concat([existing_venue, new_venue_df])
+        combined_venue.to_csv(os.path.join(RAW_DATA_PATH, "venue_stats.csv"))
+    
+    print("\n=== Complete ===")
+
+if __name__ == "__main__":
+    save_all_data()
