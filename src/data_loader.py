@@ -123,7 +123,7 @@ def get_all_player_data(player_name):
                 
                 round_num = cells[2].text.strip()
                 result = cells[3].text.strip()
-                di_text = cells[7].text.strip()
+                di_text = cells[8].text.strip()
                 
                 if not di_text:
                     continue
