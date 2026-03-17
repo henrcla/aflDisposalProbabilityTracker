@@ -8,6 +8,20 @@ MIN_GAME_PCT = 50
 # e.g. 15+ disposals, 20+ disposals, 25+ disposals
 DISPOSAL_TARGETS = [15, 20, 25]
 
+# Minimum recent season average to be included for each target
+TARGET_MIN_AVERAGES = {
+    15: 12,
+    20: 15,
+    25: 18
+}
+
+# Maximum recent season average to be included for each target
+TARGET_MAX_AVERAGES = {
+    15: 18,  # Players averaging 22+ almost always hit 15
+    20: 24,  # Players averaging 28+ almost always hit 20
+    25: 30   # Players averaging 35+ almost always hit 25
+}
+
 def load_data():
     """
     Loads raw data and applies basic quality filters.
@@ -161,48 +175,58 @@ def add_home_away_feature(games_df):
     
     return games_df
 
+def build_features_for_target(games_df, opponent_stats, venue_stats, target):
+    """
+    Builds feature dataset for a specific disposal target.
+    Filters to players for whom this target is meaningful.
+    """
+    # Calculate recent season averages
+    recent_averages = games_df[games_df["season"] >= 2022].groupby("player")["disposals"].mean()
+    min_avg = TARGET_MIN_AVERAGES[target]
+    max_avg = TARGET_MAX_AVERAGES[target]
+    relevant_players = recent_averages[
+        (recent_averages >= min_avg) & (recent_averages <= max_avg)
+    ].index
+    filtered_df = games_df[games_df["player"].isin(relevant_players)].copy()
+    
+    print(f"\nTarget {target}+ disposals:")
+    print(f"  Players: {filtered_df['player'].nunique()}")
+    
+    filtered_df = add_rolling_features(filtered_df)
+    filtered_df = add_opponent_venue_features(filtered_df, opponent_stats, venue_stats)
+    filtered_df = add_target_variables(filtered_df)
+    filtered_df = add_home_away_feature(filtered_df)
+    
+    before = len(filtered_df)
+    filtered_df = filtered_df.dropna(subset=["rolling_avg_5"])
+    print(f"  Games after filtering: {len(filtered_df)}")
+    
+    hit_rate = filtered_df[f"hit_{target}_disposals"].mean() * 100
+    print(f"  Hit rate: {hit_rate:.1f}%")
+    
+    return filtered_df
+
+
 def build_features(save=True):
     """
-    Master function that builds the complete feature set.
-    Loads raw data, adds all features, and saves the result.
+    Builds separate feature datasets for each disposal target.
     """
     print("Loading data...")
     games_df, opponent_stats, venue_stats = load_data()
+    
+    datasets = {}
+    
+    for target in DISPOSAL_TARGETS:
+        df = build_features_for_target(games_df, opponent_stats, venue_stats, target)
+        datasets[target] = df
         
-    print("Adding rolling features...")
-    games_df = add_rolling_features(games_df)
-        
-    print("Adding opponent and venue features...")
-    games_df = add_opponent_venue_features(games_df, opponent_stats, venue_stats)
-        
-    print("Adding target variables...")
-    games_df = add_target_variables(games_df)
-        
-    print("Adding round features...")
-    games_df = add_home_away_feature(games_df)
-        
-    # Drop rows where we don't have enough history for rolling features
-    before = len(games_df)
-    games_df = games_df.dropna(subset=["rolling_avg_5"])
-    after = len(games_df)
-    print(f"Dropped {before - after} rows with insufficient history")
-        
-    print(f"\nFinal dataset: {len(games_df)} games, {len(games_df.columns)} columns")
-    print(f"Columns: {games_df.columns.tolist()}")
-        
-    if save:
-        games_df.to_csv("data/raw/features.csv", index=False)
-        print("Saved to data/raw/features.csv")
-        
-    return games_df
+        if save:
+            path = f"data/raw/features_{target}.csv"
+            df.to_csv(path, index=False)
+            print(f"  Saved to {path}")
+    
+    return datasets
 
 
 if __name__ == "__main__":
-    df = build_features()
-    
-    # Show summary of target variables
-    print("\nTarget variable hit rates:")
-    for target in DISPOSAL_TARGETS:
-        col = f"hit_{target}_disposals"
-        rate = df[col].mean() * 100
-        print(f"  {target}+ disposals: {rate:.1f}% of games")
+    datasets = build_features()
