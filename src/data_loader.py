@@ -13,7 +13,7 @@ TEAMS = [
     "westcoast", "bullldogs"
 ]
 
-SEASONS = [2022, 2023, 2024]
+SEASONS = [2022, 2023, 2024, 2025, 2026]
 
 RAW_DATA_PATH = "data/raw/"
 
@@ -99,7 +99,11 @@ def get_all_player_data(player_name):
         # --- Extract game by game data ---
         all_games = []
         
-        for table in tables[7:]:
+        if len(tables) < 8:
+            # Not enough tables - player has very limited history
+            return pd.DataFrame(), {}, {}
+        
+        for table in tables:
             first_row = table.find("tr")
             season_label = first_row.text.strip()
             
@@ -144,23 +148,56 @@ def get_all_player_data(player_name):
         
         games_df = pd.DataFrame(all_games)
         
+        # --- Find opponent and venue tables dynamically ---
+        opponent_table = None
+        venue_table = None
+        for table in tables:
+            first_row = table.find("tr")
+            if first_row is None:
+                continue
+            headers = first_row.find_all(["th", "td"])
+            if not headers:
+                continue
+            first_header = headers[0].text.strip()
+            if first_header == "Opponent":
+                opponent_table = table
+            elif first_header == "Venue":
+                venue_table = table
+
         # --- Extract opponent stats ---
         opponent_stats = {}
-        opponent_table = tables[5]
-        
-        for row in opponent_table.find_all("tr")[1:]:
-            cells = row.find_all("td")
-            if len(cells) < 6:
-                continue
-            opponent = cells[0].text.strip()
-            if not opponent or opponent == "Totals":
-                continue
-            da_text = cells[6].text.strip()
-            if da_text:
-                try:
-                    opponent_stats[opponent] = float(da_text)
-                except ValueError:
+        if opponent_table is not None:
+            opponent_table = opponent_table
+            for row in opponent_table.find_all("tr")[1:]:
+                cells = row.find_all("td")
+                if len(cells) < 6:
                     continue
+                opponent = cells[0].text.strip()
+                if not opponent or opponent == "Totals":
+                    continue
+                da_text = cells[6].text.strip()
+                if da_text:
+                    try:
+                        opponent_stats[opponent] = float(da_text)
+                    except ValueError:
+                        continue
+        
+        # --- Extract venue stats ---
+        venue_stats = {}
+        if venue_table is not None:
+            for row in venue_table.find_all("tr")[1:]:
+                cells = row.find_all("td")
+                if len(cells) < 6:
+                    continue
+                venue = cells[0].text.strip()
+                if not venue or venue == "Totals":
+                    continue
+                da_text = cells[6].text.strip()
+                if da_text:
+                    try:
+                        venue_stats[venue] = float(da_text)
+                    except ValueError:
+                        continue
         
         # --- Extract venue stats ---
         venue_stats = {}
@@ -367,5 +404,92 @@ def save_missing_teams():
     
     print("\n=== Complete ===")
 
+def update_current_season():
+    """
+    Updates data for the current season only.
+    Run this weekly during the season to keep predictions fresh.
+    Overwrites existing current season data with latest results.
+    """
+    CURRENT_SEASON = 2026
+    
+    print(f"Updating {CURRENT_SEASON} season data...")
+    
+    # Load existing data
+    games_path = os.path.join(RAW_DATA_PATH, "all_games.csv")
+    opponent_path = os.path.join(RAW_DATA_PATH, "opponent_stats.csv")
+    venue_path = os.path.join(RAW_DATA_PATH, "venue_stats.csv")
+    
+    existing_games = pd.read_csv(games_path)
+    
+    # Remove existing current season data - we'll replace it
+    existing_games = existing_games[
+        existing_games["season"] != CURRENT_SEASON
+    ]
+    
+    all_games = []
+    all_opponent_stats = {}
+    all_venue_stats = {}
+    scraped_players = set()
+    
+    for team in TEAMS:
+        print(f"  Fetching {team}...")
+        players = get_team_players(team, CURRENT_SEASON)
+        
+        if not players:
+            continue
+        
+        for player_name in players:
+            if player_name in scraped_players:
+                continue
+            
+            print(f"    Updating {player_name}...")
+            games_df, opponent_stats, venue_stats = get_all_player_data(
+                player_name
+            )
+            
+            if not games_df.empty:
+                # Only keep current season games from fresh scrape
+                current = games_df[games_df["season"] == CURRENT_SEASON]
+                if not current.empty:
+                    all_games.append(current)
+            
+            if opponent_stats:
+                all_opponent_stats[player_name] = opponent_stats
+            if venue_stats:
+                all_venue_stats[player_name] = venue_stats
+            
+            scraped_players.add(player_name)
+    
+    if all_games:
+        new_games = pd.concat(all_games, ignore_index=True)
+        combined = pd.concat([existing_games, new_games], ignore_index=True)
+        combined.to_csv(games_path, index=False)
+        print(f"\nUpdated {len(new_games)} games for {CURRENT_SEASON}")
+        print(f"Total games now: {len(combined)}")
+    
+    # Update opponent and venue stats
+    if all_opponent_stats:
+        existing_opponent = pd.read_csv(opponent_path, index_col=0)
+        new_opponent_df = pd.DataFrame(all_opponent_stats).T
+        # Update existing rows, add new ones
+        combined_opponent = pd.concat(
+            [existing_opponent, new_opponent_df]
+        ).groupby(level=0).last()
+        combined_opponent.to_csv(opponent_path)
+    
+    if all_venue_stats:
+        existing_venue = pd.read_csv(venue_path, index_col=0)
+        new_venue_df = pd.DataFrame(all_venue_stats).T
+        combined_venue = pd.concat(
+            [existing_venue, new_venue_df]
+        ).groupby(level=0).last()
+        combined_venue.to_csv(venue_path)
+    
+    print("\nUpdate complete.")
+
 if __name__ == "__main__":
-    save_all_data()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "update":
+        update_current_season()
+    else:
+        save_all_data()
