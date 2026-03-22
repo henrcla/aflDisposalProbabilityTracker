@@ -18,6 +18,7 @@ import xgboost as xgb
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+import joblib
 
 # Features used to train model
 FEATURE_COLS = [
@@ -91,6 +92,53 @@ def evaluate_model(model, X, y, model_name, target):
         "brier_std": brier_scores.std()
     }
 
+def train_final_model(target):
+    """
+    Trains the final model on the complete dataset and saves it to disk.
+    
+    Unlike cross validation which splits data, this trains on everything
+    we have to maximise the model's knowledge before making predictions.
+    """
+    print(f"\nTraining final model for {target}+ disposals...")
+    
+    X, y, df = load_target_data(target)
+    
+    # Use XGBoost as our final model based on evaluation results
+    model = xgb.XGBClassifier(
+        n_estimators=100,
+        max_depth=4,
+        learning_rate=0.1,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42,
+        eval_metric="logloss",
+        verbosity=0
+    )
+    
+    # Train on full dataset
+    model.fit(X, y)
+    
+    # Save model to disk
+    os.makedirs("models/", exist_ok=True)
+    model_path = f"models/xgb_{target}.joblib"
+    joblib.dump(model, model_path)
+    print(f"  Saved model to {model_path}")
+    
+    # Also save the feature column order - important for predictions
+    # The model expects features in exactly this order
+    feature_path = f"models/features_{target}.joblib"
+    joblib.dump(FEATURE_COLS, feature_path)
+    print(f"  Saved feature cols to {feature_path}")
+    
+    # Save the scaler for standardisation
+    scaler = StandardScaler()
+    scaler.fit(X)
+    scaler_path = f"models/scaler_{target}.joblib"
+    joblib.dump(scaler, scaler_path)
+    print(f"  Saved scaler to {scaler_path}")
+    
+    return model
+
 def train_and_evaluate(target):
     """
     Trains and evaluates both baseline and XGBoost models
@@ -135,6 +183,7 @@ if __name__ == "__main__":
     
     all_results = []
     
+    # Evaluate models
     for target in DISPOSAL_TARGETS:
         results = train_and_evaluate(target)
         all_results.extend(results)
@@ -145,3 +194,12 @@ if __name__ == "__main__":
     print(f"{'='*50}")
     results_df = pd.DataFrame(all_results)
     print(results_df[["target", "model_name", "auc_mean", "brier_mean"]].to_string(index=False))
+    
+    # Train and save final models
+    print(f"\n{'='*50}")
+    print("TRAINING FINAL MODELS")
+    print(f"{'='*50}")
+    for target in DISPOSAL_TARGETS:
+        train_final_model(target)
+    
+    print("\nAll models saved successfully.")
